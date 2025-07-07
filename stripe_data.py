@@ -22,7 +22,7 @@ con.execute(f"""
 
 # Example: List CSV files in the S3 bucket
 result = con.execute(f"""
-    SELECT * FROM read_parquet('s3://{s3_bucket}/2025063000/livemode/accounts/*.parquet')
+    SELECT * FROM read_parquet('s3://{s3_bucket}/2025063000/livemode/charges/*.parquet')
     LIMIT 5
 """).fetchdf()
 
