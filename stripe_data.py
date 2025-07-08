@@ -2,8 +2,8 @@ import os
 import boto3
 import duckdb
 import pandas as pd
-from sqlalchemy import create_engine, text
 from datetime import datetime
+from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
 # === Load environment variables ===
@@ -21,128 +21,144 @@ PG_PORT = os.getenv('PG_PORT', '5432')
 PG_NAME = os.getenv('PG_NAME')
 PG_USER = os.getenv('PG_USER')
 PG_PASSWORD = os.getenv('PG_PASSWORD')
-SCHEMA = 'public'
+SCHEMA = 'finance'
 
-# Tables to process
-TABLES = ['charges', 'products', 'prices']
+TABLES = ['charges', 'invoice_line_items', 'prices', 'products']
 
 # PostgreSQL engine
 pg_url = f"postgresql+psycopg2://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_NAME}"
 engine = create_engine(pg_url)
 
-# AWS S3 client
+# AWS S3 + DuckDB setup
 s3 = boto3.client('s3', region_name=REGION)
-
-# DuckDB connection + S3 config
 con = duckdb.connect()
 con.execute("INSTALL httpfs; LOAD httpfs;")
 con.execute(f"SET s3_region='{REGION}';")
 con.execute(f"SET s3_access_key_id='{AWS_KEY}';")
 con.execute(f"SET s3_secret_access_key='{AWS_SECRET}';")
 
-def get_all_date_folders(bucket):
+# === Get the latest folder by timestamp (e.g., 2025070718) ===
+def get_latest_snapshot_folder(bucket):
     paginator = s3.get_paginator('list_objects_v2')
     result = paginator.paginate(Bucket=bucket, Delimiter='/')
+
     folders = []
     for page in result:
         for cp in page.get('CommonPrefixes', []):
             folder = cp['Prefix'].strip('/')
-            try:
-                datetime.strptime(folder, "%Y-%m-%d")
+            if len(folder) == 10 and folder.isdigit():
                 folders.append(folder)
-            except ValueError:
-                continue
-    return sorted(folders)
 
-def read_parquet_from_s3(table, date_folder):
-    path = f"s3://{BUCKET}/{date_folder}/livemode/{table}.parquet"
-    print(f"📥 Reading {path}...")
-    if table == "charges":
-        return con.execute(f"SELECT id, amount, created, status FROM read_parquet('{path}')").df()
-    elif table == "products":
-        return con.execute(f"SELECT id, name, active FROM read_parquet('{path}')").df()
-    elif table == "prices":
-        return con.execute(f"SELECT id, product AS product_id, unit_amount FROM read_parquet('{path}')").df()
+    if not folders:
+        return None
 
-def load_and_deduplicate(table, df):
-    staging = f"staging_{table}"
-    df.to_sql(staging, engine, schema=SCHEMA, if_exists='replace', index=False, method='multi')
-    with engine.begin() as conn:
-        if table == 'charges':
-            conn.execute(text(f"""
-                INSERT INTO {SCHEMA}.charges (id, amount, created, status)
-                SELECT id, amount, created, status FROM {SCHEMA}.{staging}
-                ON CONFLICT (id) DO UPDATE SET
-                    amount = EXCLUDED.amount,
-                    created = EXCLUDED.created,
-                    status = EXCLUDED.status;
-                TRUNCATE TABLE {SCHEMA}.{staging};
-            """))
-        elif table == 'products':
-            conn.execute(text(f"""
-                INSERT INTO {SCHEMA}.products (id, name, active)
-                SELECT id, name, active FROM {SCHEMA}.{staging}
-                ON CONFLICT (id) DO UPDATE SET
-                    name = EXCLUDED.name,
-                    active = EXCLUDED.active;
-                TRUNCATE TABLE {SCHEMA}.{staging};
-            """))
-        elif table == 'prices':
-            conn.execute(text(f"""
-                INSERT INTO {SCHEMA}.prices (id, product_id, unit_amount)
-                SELECT id, product_id, unit_amount FROM {SCHEMA}.{staging}
-                ON CONFLICT (id) DO NOTHING;
-                TRUNCATE TABLE {SCHEMA}.{staging};
-            """))
+    return sorted(folders)[-1]  # Most recent snapshot
 
 def get_loaded_folders():
     with engine.connect() as conn:
         result = conn.execute(text("SELECT folder_name FROM loaded_snapshots"))
         return set(row[0] for row in result)
 
-def mark_folder_loaded(folder_name):
+def mark_folder_loaded(folder):
     with engine.begin() as conn:
         conn.execute(text("""
             INSERT INTO loaded_snapshots (folder_name)
             VALUES (:folder)
             ON CONFLICT (folder_name) DO NOTHING;
-        """), {"folder": folder_name})
+        """), {"folder": folder})
+
+def read_parquet_from_s3(table, snapshot_folder):
+    path = f"s3://{BUCKET}/{snapshot_folder}/livemode/{table}/*.parquet"
+    print(f"📥 Reading: {path}")
+
+    if table == "charges":
+        return con.execute(f"""
+            SELECT id, status, created, currency, amount
+            FROM read_parquet('{path}')
+        """).df()
+
+    elif table == "invoice_line_items":
+        return con.execute(f"""
+            SELECT invoice_id, price_id
+            FROM read_parquet('{path}')
+        """).df()
+
+    elif table == "prices":
+        return con.execute(f"""
+            SELECT id, product_id
+            FROM read_parquet('{path}')
+        """).df()
+
+    elif table == "products":
+        return con.execute(f"""
+            SELECT id, name
+            FROM read_parquet('{path}')
+        """).df()
+
+def load_and_deduplicate(table, df):
+    staging = f"staging_{table}"
+    df.to_sql(staging, engine, schema=SCHEMA, if_exists='replace', index=False, method='multi')
+
+    with engine.begin() as conn:
+        if table == 'charges':
+            conn.execute(text(f"""
+                INSERT INTO {SCHEMA}.charges (id, status, created, currency, amount)
+                SELECT id, status, created, currency, amount FROM {SCHEMA}.{staging}
+                ON CONFLICT (id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    created = EXCLUDED.created,
+                    currency = EXCLUDED.currency,
+                    amount = EXCLUDED.amount;
+                TRUNCATE TABLE {SCHEMA}.{staging};
+            """))
+        elif table == 'invoice_line_items':
+            conn.execute(text(f"""
+                INSERT INTO {SCHEMA}.invoice_line_items (invoice_id, price_id)
+                SELECT invoice_id, price_id FROM {SCHEMA}.{staging}
+                ON CONFLICT (invoice_id) DO UPDATE SET
+                    price_id = EXCLUDED.price_id;
+                TRUNCATE TABLE {SCHEMA}.{staging};
+            """))
+        elif table == 'prices':
+            conn.execute(text(f"""
+                INSERT INTO {SCHEMA}.prices (id, product_id)
+                SELECT id, product_id FROM {SCHEMA}.{staging}
+                ON CONFLICT (id) DO UPDATE SET
+                    product_id = EXCLUDED.product_id;
+                TRUNCATE TABLE {SCHEMA}.{staging};
+            """))
+        elif table == 'products':
+            conn.execute(text(f"""
+                INSERT INTO {SCHEMA}.products (id, name)
+                SELECT id, name FROM {SCHEMA}.{staging}
+                ON CONFLICT (id) DO UPDATE SET
+                    name = EXCLUDED.name;
+                TRUNCATE TABLE {SCHEMA}.{staging};
+            """))
 
 def main():
-    date_folders = get_all_date_folders(BUCKET)
-    if not date_folders:
-        print("⚠️ No date folders found in S3.")
+    latest_folder = get_latest_snapshot_folder(BUCKET)
+    print(f"Latest snapshot folder: {latest_folder}")
+    
+    if not latest_folder:
+        print("⚠️ No valid snapshot folders found.")
         return
 
-    loaded_folders = get_loaded_folders()
+    loaded = get_loaded_folders()
+    if latest_folder in loaded:
+        print(f"✅ Latest snapshot '{latest_folder}' already processed.")
+        return
 
-    if not loaded_folders:
-        latest = date_folders[-1]
-        print(f"🟢 Initial load from latest snapshot: {latest}")
-        for table in TABLES:
-            try:
-                df = read_parquet_from_s3(table, latest)
-                load_and_deduplicate(table, df)
-            except Exception as e:
-                print(f"⚠️ Skipping {table} from {latest}: {e}")
-        mark_folder_loaded(latest)
-    else:
-        new_folders = [f for f in date_folders if f not in loaded_folders]
-        if not new_folders:
-            print("✅ No new data to load.")
-            return
+    print(f"\n📂 Processing latest snapshot: {latest_folder}")
+    for table in TABLES:
+        try:
+            df = read_parquet_from_s3(table, latest_folder)
+            load_and_deduplicate(table, df)
+        except Exception as e:
+            print(f"⚠️ Skipping {table} from {latest_folder}: {e}")
+    mark_folder_loaded(latest_folder)
 
-        for folder in new_folders:
-            print(f"\n📁 Processing new snapshot: {folder}")
-            for table in TABLES:
-                try:
-                    df = read_parquet_from_s3(table, folder)
-                    load_and_deduplicate(table, df)
-                except Exception as e:
-                    print(f"⚠️ Skipping {table} from {folder}: {e}")
-            mark_folder_loaded(folder)
-
-    print("\n✅ All available Stripe data loaded into PostgreSQL.")
+    print("\n✅ Snapshot loaded.")
 
 if __name__ == "__main__":
     main()

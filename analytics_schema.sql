@@ -74,3 +74,8 @@ CREATE TABLE customers (
     tax_info_type VARCHAR,
     tax_ip_address VARCHAR
 );
+
+CREATE TABLE IF NOT EXISTS loaded_snapshots (
+    folder_name VARCHAR PRIMARY KEY,
+    loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
