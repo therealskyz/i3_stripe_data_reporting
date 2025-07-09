@@ -2,22 +2,20 @@ import os
 import boto3
 import duckdb
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
 # === Load environment variables ===
 load_dotenv()
 
-# AWS & S3
 REGION = os.getenv('AWS_REGION')
 AWS_KEY = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET = os.getenv('AWS_SECRET_ACCESS_KEY')
 BUCKET = os.getenv('S3_BUCKET')
 
-# PostgreSQL
 PG_HOST = os.getenv('PG_HOST')
-PG_PORT = os.getenv('PG_PORT', '5432')
+PG_PORT = os.getenv('PG_PORT')
 PG_NAME = os.getenv('PG_NAME')
 PG_USER = os.getenv('PG_USER')
 PG_PASSWORD = os.getenv('PG_PASSWORD')
@@ -25,11 +23,11 @@ SCHEMA = 'finance'
 
 TABLES = ['charges', 'invoice_line_items', 'prices', 'products']
 
-# PostgreSQL engine
+# PostgreSQL connection
 pg_url = f"postgresql+psycopg2://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/{PG_NAME}"
 engine = create_engine(pg_url)
 
-# AWS S3 + DuckDB setup
+# AWS S3 and DuckDB
 s3 = boto3.client('s3', region_name=REGION)
 con = duckdb.connect()
 con.execute("INSTALL httpfs; LOAD httpfs;")
@@ -37,7 +35,7 @@ con.execute(f"SET s3_region='{REGION}';")
 con.execute(f"SET s3_access_key_id='{AWS_KEY}';")
 con.execute(f"SET s3_secret_access_key='{AWS_SECRET}';")
 
-# === Get the latest folder by timestamp (e.g., 2025070718) ===
+# === Step 1: Find latest folder ===
 def get_latest_snapshot_folder(bucket):
     paginator = s3.get_paginator('list_objects_v2')
     result = paginator.paginate(Bucket=bucket, Delimiter='/')
@@ -49,11 +47,9 @@ def get_latest_snapshot_folder(bucket):
             if len(folder) == 10 and folder.isdigit():
                 folders.append(folder)
 
-    if not folders:
-        return None
+    return sorted(folders)[-1] if folders else None
 
-    return sorted(folders)[-1]  # Most recent snapshot
-
+# === Step 2: Track loaded folders ===
 def get_loaded_folders():
     with engine.connect() as conn:
         result = conn.execute(text("SELECT folder_name FROM loaded_snapshots"))
@@ -67,6 +63,7 @@ def mark_folder_loaded(folder):
             ON CONFLICT (folder_name) DO NOTHING;
         """), {"folder": folder})
 
+# === Step 3: Read from Parquet ===
 def read_parquet_from_s3(table, snapshot_folder):
     path = f"s3://{BUCKET}/{snapshot_folder}/livemode/{table}/*.parquet"
     print(f"📥 Reading: {path}")
@@ -76,25 +73,23 @@ def read_parquet_from_s3(table, snapshot_folder):
             SELECT id, status, created, currency, amount
             FROM read_parquet('{path}')
         """).df()
-
     elif table == "invoice_line_items":
         return con.execute(f"""
             SELECT invoice_id, price_id
             FROM read_parquet('{path}')
         """).df()
-
     elif table == "prices":
         return con.execute(f"""
             SELECT id, product_id
             FROM read_parquet('{path}')
         """).df()
-
     elif table == "products":
         return con.execute(f"""
             SELECT id, name
             FROM read_parquet('{path}')
         """).df()
 
+# === Step 4: Insert or update in PostgreSQL ===
 def load_and_deduplicate(table, df):
     staging = f"staging_{table}"
     df.to_sql(staging, engine, schema=SCHEMA, if_exists='replace', index=False, method='multi')
@@ -136,12 +131,36 @@ def load_and_deduplicate(table, df):
                 TRUNCATE TABLE {SCHEMA}.{staging};
             """))
 
+# === Step 5: Clean up old snapshots ===
+def delete_previous_day_snapshots(bucket):
+    today_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+
+    paginator = s3.get_paginator('list_objects_v2')
+    result = paginator.paginate(Bucket=bucket, Delimiter="/")
+
+    for page in result:
+        for cp in page.get('CommonPrefixes', []):
+            folder = cp['Prefix'].strip('/')
+            if len(folder) == 10 and folder.isdigit():
+                if not folder.startswith(today_str):
+                    print(f"🗑️ Deleting old snapshot folder: {folder}")
+                    delete_objects_under_prefix(bucket, folder + '/')
+
+def delete_objects_under_prefix(bucket, prefix):
+    paginator = s3.get_paginator('list_objects_v2')
+    result = paginator.paginate(Bucket=bucket, Prefix=prefix)
+
+    for page in result:
+        if "Contents" in page:
+            keys = [{'Key': obj['Key']} for obj in page['Contents']]
+            if keys:
+                s3.delete_objects(Bucket=bucket, Delete={'Objects': keys})
+
+# === Main entry point ===
 def main():
     latest_folder = get_latest_snapshot_folder(BUCKET)
-    print(f"Latest snapshot folder: {latest_folder}")
-    
     if not latest_folder:
-        print("⚠️ No valid snapshot folders found.")
+        print("⚠️ No snapshot folders found.")
         return
 
     loaded = get_loaded_folders()
@@ -149,16 +168,18 @@ def main():
         print(f"✅ Latest snapshot '{latest_folder}' already processed.")
         return
 
-    print(f"\n📂 Processing latest snapshot: {latest_folder}")
+    print(f"\n📂 Processing snapshot: {latest_folder}")
     for table in TABLES:
         try:
             df = read_parquet_from_s3(table, latest_folder)
             load_and_deduplicate(table, df)
         except Exception as e:
             print(f"⚠️ Skipping {table} from {latest_folder}: {e}")
-    mark_folder_loaded(latest_folder)
 
-    print("\n✅ Snapshot loaded.")
+    mark_folder_loaded(latest_folder)
+    delete_previous_day_snapshots(BUCKET)
+
+    print("\n✅ Done: Snapshot loaded and old folders deleted.")
 
 if __name__ == "__main__":
     main()
