@@ -4,6 +4,7 @@
 CREATE TABLE staging_charges (
     id VARCHAR PRIMARY KEY,
     status VARCHAR,
+    invoice_id VARCHAR,
     created TIMESTAMP,
     currency VARCHAR,
     amount BIGINT
@@ -11,7 +12,8 @@ CREATE TABLE staging_charges (
 
 -- Table: staging_invoice_line_items
 CREATE TABLE staging_invoice_line_items (
-    invoice_id VARCHAR PRIMARY KEY,
+    id VARCHAR PRIMARY KEY,
+    invoice_id VARCHAR,
     price_id VARCHAR
 ); 
 

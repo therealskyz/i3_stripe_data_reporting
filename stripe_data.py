@@ -38,17 +38,8 @@ con.execute(f"SET s3_secret_access_key='{AWS_SECRET}';")
 
 # === Step 1: Find latest snapshot folder ===
 def get_latest_snapshot_folder(bucket):
-    paginator = s3.get_paginator('list_objects_v2')
-    result = paginator.paginate(Bucket=bucket, Delimiter='/')
-
-    folders = []
-    for page in result:
-        for cp in page.get('CommonPrefixes', []):
-            folder = cp['Prefix'].strip('/')
-            if len(folder) == 10 and folder.isdigit():
-                folders.append(folder)
-
-    return sorted(folders)[-1] if folders else None
+    folders = get_snapshot_folders_with_success_marker(bucket)
+    return folders[-1] if folders else None
 
 # === Step 2: Track loaded folders ===
 def get_loaded_folders():
@@ -71,12 +62,12 @@ def read_parquet_from_s3(table, snapshot_folder):
 
     if table == "charges":
         return con.execute(f"""
-            SELECT id, status, created, currency, amount
+            SELECT id, status, invoice_id, created, currency, amount
             FROM read_parquet('{path}')
         """).df()
     elif table == "invoice_line_items":
         return con.execute(f"""
-            SELECT invoice_id, price_id
+            SELECT id, invoice_id, price_id
             FROM read_parquet('{path}')
         """).df()
     elif table == "prices":
@@ -98,10 +89,11 @@ def load_and_deduplicate(table, df):
     with engine.begin() as conn:
         if table == 'charges':
             conn.execute(text(f"""
-                INSERT INTO {SCHEMA}.charges (id, status, created, currency, amount)
-                SELECT id, status, created, currency, amount FROM {SCHEMA}.{staging}
+                INSERT INTO {SCHEMA}.charges (id, status, invoice_id, created, currency, amount)
+                SELECT id, status, invoice_id, created, currency, amount FROM {SCHEMA}.{staging}
                 ON CONFLICT (id) DO UPDATE SET
                     status = EXCLUDED.status,
+                    invoice_id = EXCLUDED.invoice_id,
                     created = EXCLUDED.created,
                     currency = EXCLUDED.currency,
                     amount = EXCLUDED.amount;
@@ -109,9 +101,10 @@ def load_and_deduplicate(table, df):
             """))
         elif table == 'invoice_line_items':
             conn.execute(text(f"""
-                INSERT INTO {SCHEMA}.invoice_line_items (invoice_id, price_id)
-                SELECT invoice_id, price_id FROM {SCHEMA}.{staging}
-                ON CONFLICT (invoice_id) DO UPDATE SET
+                INSERT INTO {SCHEMA}.invoice_line_items (id, invoice_id, price_id)
+                SELECT id, invoice_id, price_id FROM {SCHEMA}.{staging}
+                ON CONFLICT (id) DO UPDATE SET
+                    invoice_id = EXCLUDED.invoice_id,
                     price_id = EXCLUDED.price_id;
                 TRUNCATE TABLE {SCHEMA}.{staging};
             """))
@@ -157,6 +150,25 @@ def delete_objects_under_prefix(bucket, prefix):
             if keys:
                 print(f"   Deleting {len(keys)} objects under: {prefix}")
                 s3.delete_objects(Bucket=bucket, Delete={'Objects': keys})
+
+def get_snapshot_folders_with_success_marker(bucket):
+    paginator = s3.get_paginator('list_objects_v2')
+    result = paginator.paginate(Bucket=bucket, Delimiter='/')
+
+    valid_folders = []
+    for page in result:
+        for cp in page.get('CommonPrefixes', []):
+            folder = cp['Prefix'].strip('/')
+            if len(folder) == 10 and folder.isdigit():
+                success_key = f"{folder}/livemode/coreapi_SUCCESS"
+                try:
+                    s3.head_object(Bucket=bucket, Key=success_key)
+                    valid_folders.append(folder)
+                except s3.exceptions.ClientError:
+                    # coreapi_SUCCESS does not exist; skip
+                    continue
+    return sorted(valid_folders)
+
 
 # === Main ===
 def main():

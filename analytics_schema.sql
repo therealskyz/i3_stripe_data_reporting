@@ -4,6 +4,7 @@ CREATE SCHEMA IF NOT EXISTS finance;
 CREATE TABLE charges (
     id VARCHAR PRIMARY KEY,
     status VARCHAR,
+    invoice_id VARCHAR,
     created TIMESTAMP,
     currency VARCHAR,
     amount BIGINT
@@ -11,7 +12,8 @@ CREATE TABLE charges (
 
 -- Table: invoice_line_items
 CREATE TABLE invoice_line_items (
-    invoice_id VARCHAR PRIMARY KEY,
+    id VARCHAR PRIMARY KEY,
+    invoice_id VARCHAR,
     price_id VARCHAR
 );
 
@@ -77,7 +79,7 @@ CREATE TABLE customers (
     tax_ip_address VARCHAR
 );
 
-CREATE TABLE IF NOT EXISTS loaded_snapshots (
+CREATE TABLE loaded_snapshots (
     folder_name VARCHAR PRIMARY KEY,
     loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
