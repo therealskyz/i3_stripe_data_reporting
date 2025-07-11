@@ -2,7 +2,6 @@ import os
 import boto3
 import duckdb
 import pandas as pd
-from datetime import datetime
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 from datetime import datetime, timezone
