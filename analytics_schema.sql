@@ -1,7 +1,7 @@
 CREATE SCHEMA IF NOT EXISTS finance;
 
 -- Table: charges
-CREATE TABLE charges (
+CREATE TABLE finance.charges (
     id VARCHAR PRIMARY KEY,
     status VARCHAR,
     invoice_id VARCHAR,
@@ -11,26 +11,26 @@ CREATE TABLE charges (
 );
 
 -- Table: invoice_line_items
-CREATE TABLE invoice_line_items (
+CREATE TABLE finance.invoice_line_items (
     id VARCHAR PRIMARY KEY,
     invoice_id VARCHAR,
     price_id VARCHAR
 );
 
 -- Table: prices
-CREATE TABLE prices (
+CREATE TABLE finance.prices (
     id VARCHAR PRIMARY KEY,
     product_id VARCHAR
 );
 
 -- Table: products
-CREATE TABLE products (
+CREATE TABLE finance.products (
     id VARCHAR PRIMARY KEY,
     name VARCHAR
 );
 
 -- Table: customers
-CREATE TABLE customers (
+CREATE TABLE finance.customers (
     id VARCHAR PRIMARY KEY,
     account_balance BIGINT,
     address_city VARCHAR,
@@ -79,7 +79,7 @@ CREATE TABLE customers (
     tax_ip_address VARCHAR
 );
 
-CREATE TABLE loaded_snapshots (
+CREATE TABLE finance.loaded_snapshots (
     folder_name VARCHAR PRIMARY KEY,
     loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

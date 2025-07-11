@@ -1,7 +1,7 @@
 -- This SQL script creates staging tables for Stripe data.
 
 -- Table: staging_charges
-CREATE TABLE staging_charges (
+CREATE TABLE finance.staging_charges (
     id VARCHAR PRIMARY KEY,
     status VARCHAR,
     invoice_id VARCHAR,
@@ -11,26 +11,26 @@ CREATE TABLE staging_charges (
 );
 
 -- Table: staging_invoice_line_items
-CREATE TABLE staging_invoice_line_items (
+CREATE TABLE finance.staging_invoice_line_items (
     id VARCHAR PRIMARY KEY,
     invoice_id VARCHAR,
     price_id VARCHAR
 ); 
 
 -- Table: staging_prices
-CREATE TABLE staging_prices (
+CREATE TABLE finance.staging_prices (
     id VARCHAR PRIMARY KEY,
     product_id VARCHAR  
 );          
 
 -- Table: staging_products
-CREATE TABLE staging_products (
+CREATE TABLE finance.staging_products (
     id VARCHAR PRIMARY KEY,
     name VARCHAR
 );  
 
 -- Table: staging_customers
-CREATE TABLE staging_customers (
+CREATE TABLE finance.staging_customers (
     id VARCHAR PRIMARY KEY,
     account_balance BIGINT,
     address_city VARCHAR,
