@@ -1,3 +1,5 @@
+CREATE SCHEMA IF NOT EXISTS finance;
+
 -- Table: charges
 CREATE TABLE charges (
     id VARCHAR PRIMARY KEY,

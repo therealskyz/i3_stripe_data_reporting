@@ -2,9 +2,10 @@ import os
 import boto3
 import duckdb
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
+from datetime import datetime, timezone
 
 # === Load environment variables ===
 load_dotenv()
@@ -35,7 +36,7 @@ con.execute(f"SET s3_region='{REGION}';")
 con.execute(f"SET s3_access_key_id='{AWS_KEY}';")
 con.execute(f"SET s3_secret_access_key='{AWS_SECRET}';")
 
-# === Step 1: Find latest folder ===
+# === Step 1: Find latest snapshot folder ===
 def get_latest_snapshot_folder(bucket):
     paginator = s3.get_paginator('list_objects_v2')
     result = paginator.paginate(Bucket=bucket, Delimiter='/')
@@ -52,13 +53,13 @@ def get_latest_snapshot_folder(bucket):
 # === Step 2: Track loaded folders ===
 def get_loaded_folders():
     with engine.connect() as conn:
-        result = conn.execute(text("SELECT folder_name FROM loaded_snapshots"))
+        result = conn.execute(text(f"SELECT folder_name FROM {SCHEMA}.loaded_snapshots"))
         return set(row[0] for row in result)
 
 def mark_folder_loaded(folder):
     with engine.begin() as conn:
         conn.execute(text("""
-            INSERT INTO loaded_snapshots (folder_name)
+            INSERT INTO finance.loaded_snapshots (folder_name)
             VALUES (:folder)
             ON CONFLICT (folder_name) DO NOTHING;
         """), {"folder": folder})
@@ -131,7 +132,7 @@ def load_and_deduplicate(table, df):
                 TRUNCATE TABLE {SCHEMA}.{staging};
             """))
 
-# === Step 5: Clean up old snapshots ===
+# === Step 5: Safe snapshot cleanup ===
 def delete_previous_day_snapshots(bucket):
     today_str = datetime.now(timezone.utc).strftime("%Y%m%d")
 
@@ -154,9 +155,10 @@ def delete_objects_under_prefix(bucket, prefix):
         if "Contents" in page:
             keys = [{'Key': obj['Key']} for obj in page['Contents']]
             if keys:
+                print(f"   Deleting {len(keys)} objects under: {prefix}")
                 s3.delete_objects(Bucket=bucket, Delete={'Objects': keys})
 
-# === Main entry point ===
+# === Main ===
 def main():
     latest_folder = get_latest_snapshot_folder(BUCKET)
     if not latest_folder:
