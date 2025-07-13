@@ -83,7 +83,7 @@ def read_parquet_from_s3(table, snapshot_folder):
 # === Step 4: Insert or update in PostgreSQL ===
 def load_and_deduplicate(table, df):
     staging = f"staging_{table}"
-    df.to_sql(staging, engine, schema=SCHEMA, if_exists='replace', index=False, method='multi')
+    df.to_sql(staging, engine, schema=SCHEMA, if_exists='append', index=False, method='multi')
 
     with engine.begin() as conn:
         if table == 'charges':
