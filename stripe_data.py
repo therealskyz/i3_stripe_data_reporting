@@ -4,7 +4,7 @@ import duckdb
 import pandas as pd
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
-from datetime import datetime, timezone
+from datetime import datetime
 
 # === Load environment variables ===
 load_dotenv()
@@ -126,7 +126,7 @@ def load_and_deduplicate(table, df):
 
 # === Step 5: Safe snapshot cleanup ===
 def delete_previous_day_snapshots(bucket):
-    today_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+    today_str = datetime.now().strftime("%Y%m%d")
 
     paginator = s3.get_paginator('list_objects_v2')
     result = paginator.paginate(Bucket=bucket, Delimiter="/")
