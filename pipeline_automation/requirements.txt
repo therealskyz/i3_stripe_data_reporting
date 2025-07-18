@@ -1,5 +1,0 @@
-boto3
-duckdb
-pandas
-sqlalchemy
-psycopg2-binary
