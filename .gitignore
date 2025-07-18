@@ -6,5 +6,8 @@
 *.zip
 *.log
 
-
-lambda_package/
+# --- IGNORE ---
+pipeline_automation/**
+!pipeline_automation/requirements.txt
+lambda_package/**
+!lambda_package/i3-stripe-data-reporting-lambda.py
