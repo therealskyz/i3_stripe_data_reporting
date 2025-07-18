@@ -1,5 +1,10 @@
-.env
-.txt
-.vscode
-.csv
-.ds_store
+*.env
+*.txt
+*.vscode
+*.csv
+*.ds_store
+*.zip
+*.log
+
+
+lambda_package/
