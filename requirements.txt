@@ -3,3 +3,4 @@ duckdb
 pandas
 sqlalchemy
 psycopg2-binary
+python-dotenv

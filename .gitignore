@@ -5,9 +5,7 @@
 *.ds_store
 *.zip
 *.log
-query.py
+*.venv
+
 # --- IGNORE ---
-pipeline_automation/**
-!requirements.txt
-lambda_package/**
-!lambda_package/i3-stripe-data-reporting-lambda.py
+python/
