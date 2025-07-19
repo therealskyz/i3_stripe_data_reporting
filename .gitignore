@@ -7,6 +7,8 @@
 *.log
 *.venv
 
+# Ignore query python script
+query.py
+
 # -- IGNORE --
 !requirements.txt
-
